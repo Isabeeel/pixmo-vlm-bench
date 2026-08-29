@@ -1,0 +1,11 @@
+# already installed in .venv: datasets, huggingface_hub, numpy, pillow, requests
+# CPU-only torch/torchvision/transformers/accelerate are already in .venv too
+# (installed for scripts/smoke_test.py). For the real 5 candidates on a GPU
+# box, reinstall torch/torchvision from https://download.pytorch.org/whl/cu1xx
+# (CUDA build) instead of the CPU wheels, then add:
+torch>=2.4
+torchvision
+transformers>=4.57
+accelerate>=1.0
+einops
+qwen-vl-utils
