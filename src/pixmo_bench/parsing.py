@@ -28,6 +28,14 @@ class ParsedOutput:
 
 
 def parse_output(raw_text: str) -> ParsedOutput:
+    """`ok` is strict: requires the requested POINT:(x,y)/EXPLANATION: format
+    *and* x,y in the requested 0-100 range. x/y are still populated when a
+    point-shaped pattern was found but out of range (e.g. a model reverting
+    to its own native 0-1 or 0-1000 grounding scale instead of the requested
+    percentage scale) - see scoring.rescale_to_percent, which uses these to
+    compute a separate, lenient pointing-accuracy metric without changing
+    what counts as a strict parse failure.
+    """
     text = raw_text.strip()
 
     point_match = _POINT_RE.search(text)
@@ -37,10 +45,9 @@ def parse_output(raw_text: str) -> ParsedOutput:
         return ParsedOutput(ok=False, raw=text)
 
     x, y = float(point_match.group(1)), float(point_match.group(2))
-    if not (0 <= x <= 100 and 0 <= y <= 100):
-        return ParsedOutput(ok=False, raw=text)
+    in_range = 0 <= x <= 100 and 0 <= y <= 100
 
     expl_match = _EXPLANATION_RE.search(text)
     explanation = expl_match.group(1).strip() if expl_match else text[point_match.end():].strip()
 
-    return ParsedOutput(ok=True, x=x, y=y, explanation=explanation, raw=text)
+    return ParsedOutput(ok=in_range, x=x, y=y, explanation=explanation, raw=text)

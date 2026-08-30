@@ -5,7 +5,7 @@
 # (CUDA build) instead of the CPU wheels, then add:
 torch>=2.4
 torchvision
-transformers>=4.57
+transformers>=4.57,<5  # transformers 5.x breaks Molmo2's remote processing code (ProcessorMixin kwarg handling)
 accelerate>=1.0
 einops
 qwen-vl-utils

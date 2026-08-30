@@ -21,6 +21,11 @@ class ModelSpec:
     is_reference: bool = False
     trust_remote_code: bool = False
     notes: str = ""
+    # "auto" = AutoModelForImageTextToText + AutoProcessor + generate() (default).
+    # "internvl_chat" = legacy InternVL-Chat custom class, loaded via AutoModel
+    # and driven through its own model.chat() API instead of generate() - see
+    # infer.py._run_internvl_chat.
+    api: str = "auto"
 
 
 MODEL_REGISTRY: list[ModelSpec] = [
@@ -37,6 +42,8 @@ MODEL_REGISTRY: list[ModelSpec] = [
         repo_id="OpenGVLab/InternVL3_5-2B-Instruct",
         params_b=2.0,
         trust_remote_code=True,
+        api="internvl_chat",
+        notes="legacy InternVL-Chat custom class; not AutoModelForImageTextToText compatible",
     ),
     ModelSpec(
         key="smolvlm2-2.2b",

@@ -25,6 +25,25 @@ def point_hit(pred_x: float, pred_y: float, gt_points: list[list[float]], radius
     return any(math.hypot(pred_x - gx, pred_y - gy) <= radius for gx, gy in gt_points)
 
 
+def rescale_to_percent(x: float, y: float) -> tuple[float, float] | None:
+    """Best-effort fix-up for models that ignore the requested 0-100 scale
+    and answer in their own native convention instead - observed with
+    Qwen3-VL, which mostly reverts to its training-time 0-1000 grounding
+    scale (occasionally 0-1) despite the prompt asking for percentages.
+
+    Only used for the supplementary "lenient" pointing-accuracy metric in
+    report.py; parsing.ParsedOutput.ok / parse_failure_rate are unaffected,
+    so "didn't follow the requested format" stays visible as its own signal.
+    """
+    if x <= 1 and y <= 1:
+        return x * 100, y * 100  # 0-1 normalized
+    if x <= 100 and y <= 100:
+        return x, y  # already matches the requested scale
+    if x <= 1000 and y <= 1000:
+        return x / 10, y / 10  # native 0-1000 grounding scale (e.g. Qwen-VL)
+    return None
+
+
 @dataclass
 class ExplanationScore:
     score: float  # 0-1
