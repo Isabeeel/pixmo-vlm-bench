@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
 DEFAULT_HIT_RADIUS = 7.0  # % of image diagonal-normalized scale; see note above
 
@@ -59,13 +61,89 @@ def lexical_overlap_score(prediction: str, ground_truth: str) -> ExplanationScor
     return ExplanationScore(score=min(1.0, overlap), method="lexical_overlap")
 
 
-def llm_judge_score(prediction: str, ground_truth: str, question: str) -> ExplanationScore:
-    """Optional: replace lexical_overlap_score with a real judge call.
+_JUDGE_MODEL = "claude-sonnet-5"
 
-    Requires ANTHROPIC_API_KEY. Left unimplemented here on purpose - wire up
-    the `anthropic` client once this pipeline is unblocked and that dependency
-    is worth adding.
+_JUDGE_PROMPT = """You are grading a vision-language model's explanation for why it \
+pointed at a location in the attached image, in response to the question below.
+
+Question: {question}
+Reference explanation (written by a human annotator who saw the image): {ground_truth}
+Model's explanation: {prediction}
+
+Look at the image yourself and judge whether the model's explanation is consistent \
+with it: does it correctly identify the same object/region the question asks about, \
+with reasoning that actually holds up against the image? Ignore wording differences \
+from the reference - judge the model's explanation against the image directly, using \
+the reference only as a hint about what the correct answer is.
+
+Respond with ONLY a single number from 0 to 1 (e.g. "0.8"):
+1.0 = correct object/region, reasoning holds up against the image
+0.5 = right general area but reasoning is vague, unsupported, or partly wrong
+0.0 = wrong object/region, or reasoning contradicts the image"""
+
+
+def llm_judge_score(
+    prediction: str, ground_truth: str, question: str, image_path: "Path | None" = None
+) -> ExplanationScore:
+    """Judge explanation quality with Claude instead of lexical_overlap_score.
+
+    Requires ANTHROPIC_API_KEY. Claude is itself a VLM, so when `image_path` is
+    given the judge looks at the actual image rather than only comparing two
+    strings - a real check of "is the reasoning consistent with the image",
+    which lexical_overlap_score can't do at all.
     """
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError("ANTHROPIC_API_KEY not set; fall back to lexical_overlap_score")
-    raise NotImplementedError("wire up anthropic.Anthropic().messages.create(...) here")
+
+    import base64
+
+    import anthropic
+    from PIL import Image
+
+    client = anthropic.Anthropic()
+    text = _JUDGE_PROMPT.format(question=question, ground_truth=ground_truth, prediction=prediction)
+
+    content: list[dict] = []
+    if image_path is not None:
+        image_path = Path(image_path)
+        # data.py saves every downloaded image as "<id>.jpg" regardless of its
+        # actual format, so the file extension can't be trusted - some are
+        # really PNG/BMP/WEBP/etc. and Claude's API rejects a mismatched
+        # media_type (or a format it doesn't support at all, e.g. BMP).
+        # Detect the real format by opening the file, and re-encode to PNG
+        # for anything outside the API's supported set instead of guessing.
+        with Image.open(image_path) as im:
+            fmt = im.format
+            if fmt in ("JPEG", "PNG", "GIF", "WEBP"):
+                media_type = {"JPEG": "image/jpeg", "PNG": "image/png", "GIF": "image/gif", "WEBP": "image/webp"}[fmt]
+                image_bytes = image_path.read_bytes()
+            else:
+                import io
+
+                buf = io.BytesIO()
+                im.convert("RGB").save(buf, format="PNG")
+                media_type = "image/png"
+                image_bytes = buf.getvalue()
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64.standard_b64encode(image_bytes).decode("utf-8"),
+                },
+            }
+        )
+    content.append({"type": "text", "text": text})
+
+    response = client.messages.create(
+        model=_JUDGE_MODEL,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": content}],
+    )
+    # Claude can return a leading "thinking" block before the actual text
+    # block, so pick out the text block by type rather than assuming index 0.
+    reply = next((block.text for block in response.content if block.type == "text"), "").strip()
+    match = re.search(r"(\d*\.?\d+)", reply)
+    score = max(0.0, min(1.0, float(match.group(1)))) if match else 0.0
+    return ExplanationScore(score=score, method=f"llm_judge:{_JUDGE_MODEL}")

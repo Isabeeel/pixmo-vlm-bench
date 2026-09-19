@@ -9,3 +9,6 @@ transformers>=4.57,<5  # transformers 5.x breaks Molmo2's remote processing code
 accelerate>=1.0
 einops
 qwen-vl-utils
+timm  # required by InternVL3.5's remote modeling code
+num2words  # required by SmolVLM2's processor
+anthropic  # optional: scoring.llm_judge_score, used when ANTHROPIC_API_KEY is set

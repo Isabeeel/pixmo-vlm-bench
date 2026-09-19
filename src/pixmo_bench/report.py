@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +11,12 @@ from pathlib import Path
 from .data import Example, load_subset
 from .models import MODEL_REGISTRY
 from .parsing import parse_output
-from .scoring import lexical_overlap_score, point_hit, rescale_to_percent
+from .scoring import lexical_overlap_score, llm_judge_score, point_hit, rescale_to_percent
+
+# Real judge when a key is available, otherwise the lexical-overlap placeholder.
+# Set once per report run rather than per-example so a run doesn't spam retries
+# if the key is simply missing.
+USE_LLM_JUDGE = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
 
@@ -60,7 +66,16 @@ def score_model(key: str, data_dir: Path, results_dir: Path = RESULTS_DIR) -> Mo
                     lenient_hits += 1
 
             if parsed.ok:
-                expl_scores.append(lexical_overlap_score(parsed.explanation, ex.explanation).score)
+                if USE_LLM_JUDGE:
+                    try:
+                        image_path = Path(data_dir) / ex.image_path
+                        score = llm_judge_score(parsed.explanation, ex.explanation, ex.question, image_path).score
+                    except Exception as e:
+                        print(f"!! llm_judge_score failed for {ex.id} ({e!r}), falling back to lexical overlap")
+                        score = lexical_overlap_score(parsed.explanation, ex.explanation).score
+                else:
+                    score = lexical_overlap_score(parsed.explanation, ex.explanation).score
+                expl_scores.append(score)
 
     return ModelReport(
         key=key,
@@ -78,20 +93,25 @@ def build_report(
 ) -> list[ModelReport]:
     keys = only_keys if only_keys is not None else [spec.key for spec in MODEL_REGISTRY]
     reports = [score_model(key, data_dir, results_dir) for key in keys]
-    reports.sort(key=lambda r: r.pointing_accuracy, reverse=True)
+    # Lenient pointing accuracy is the primary ranking metric: it's the
+    # cleaner read on "how good is the model's pointing" (a model's raw
+    # ability to localize the answer, independent of whether it happened to
+    # follow the requested 0-100 output convention). Strict is kept as a
+    # secondary column since instruction-following is still worth surfacing.
+    reports.sort(key=lambda r: r.pointing_accuracy_lenient, reverse=True)
     return reports
 
 
 def print_report(reports: list[ModelReport]) -> None:
     header = (
-        f"{'model':<16}{'n':>5}{'point_acc':>11}{'point_acc*':>12}"
+        f"{'model':<16}{'n':>5}{'point_acc':>11}{'point_acc(strict)':>19}"
         f"{'parse_fail':>12}{'expl_score':>12}{'lat_s':>8}"
     )
     print(header)
     print("-" * len(header))
     for r in reports:
         print(
-            f"{r.key:<16}{r.n:>5}{r.pointing_accuracy:>11.2%}{r.pointing_accuracy_lenient:>12.2%}"
+            f"{r.key:<16}{r.n:>5}{r.pointing_accuracy_lenient:>11.2%}{r.pointing_accuracy:>19.2%}"
             f"{r.parse_failure_rate:>12.2%}{r.explanation_score:>12.2f}{r.mean_latency_s:>8.2f}"
         )
-    print("\n* point_acc(lenient): rescales out-of-range points (e.g. a model's native 0-1000 scale) before scoring")
+    print("\npoint_acc is the lenient metric (rescales out-of-range points, e.g. a model's native 0-1000 scale, before scoring) and is now the primary ranking column; point_acc(strict) requires the exact requested 0-100 format")

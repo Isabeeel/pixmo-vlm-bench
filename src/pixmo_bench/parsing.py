@@ -11,7 +11,10 @@ import re
 from dataclasses import dataclass
 
 _POINT_RE = re.compile(r"POINT\s*:\s*\(?\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)?", re.IGNORECASE)
-_EXPLANATION_RE = re.compile(r"EXPLANATION\s*:\s*(.+)", re.IGNORECASE | re.DOTALL)
+# Non-greedy + lookahead so this stops before a following "POINT:" line
+# instead of swallowing it - the prompt now asks for EXPLANATION before
+# POINT, but the regex still works if a model emits the old POINT-first order.
+_EXPLANATION_RE = re.compile(r"EXPLANATION\s*:\s*(.+?)(?=\s*POINT\s*:|\Z)", re.IGNORECASE | re.DOTALL)
 
 # fallback for models that ignore the requested format but still emit
 # something point-shaped, e.g. Molmo's native <point x=".." y="..">
